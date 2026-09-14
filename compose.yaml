@@ -1,0 +1,79 @@
+name: iceberg-playground
+
+services:
+  rustfs:
+    container_name: iceberg-rustfs
+    image: docker.io/rustfs/rustfs:latest
+    command: /data
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-ICEBERGADMIN}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-iceberg-local-secret}
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+    ports:
+      - "127.0.0.1:9000:9000" # S3-compatible API
+      - "127.0.0.1:9001:9001" # RustFS console
+    volumes:
+      - iceberg-catalog-rustfs:/data
+
+  # Creates the bucket the Iceberg warehouse uses. This is safe to run again.
+  rustfs-init:
+    image: docker.io/amazon/aws-cli:2
+    depends_on:
+      rustfs:
+        condition: service_started
+    environment:
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-ICEBERGADMIN}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-iceberg-local-secret}
+      AWS_DEFAULT_REGION: us-east-1
+      WAREHOUSE_BUCKET: ${WAREHOUSE_BUCKET:-warehouse}
+    entrypoint: >-
+      /bin/sh -ec '
+      until aws --endpoint-url http://iceberg-rustfs:9000 s3api list-buckets >/dev/null 2>&1; do
+        echo "Waiting for RustFS..."
+        sleep 2
+      done;
+      aws --endpoint-url http://iceberg-rustfs:9000 s3api head-bucket --bucket "$$WAREHOUSE_BUCKET" >/dev/null 2>&1 ||
+        aws --endpoint-url http://iceberg-rustfs:9000 s3api create-bucket --bucket "$$WAREHOUSE_BUCKET"
+      '
+
+  iceberg-rest:
+    container_name: iceberg-rest
+    image: docker.io/apache/iceberg-rest-fixture:latest
+    depends_on:
+      rustfs-init:
+        condition: service_completed_successfully
+    environment:
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-ICEBERGADMIN}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-iceberg-local-secret}
+      AWS_REGION: us-east-1
+      # The fixture maps CATALOG_* environment variables to catalog properties.
+      CATALOG_WAREHOUSE: s3://${WAREHOUSE_BUCKET:-warehouse}/iceberg
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://iceberg-rustfs:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+    ports:
+      - "8181:8181"
+
+  spark-iceberg:
+    image: docker.io/tabulario/spark-iceberg:latest
+    depends_on:
+      iceberg-rest:
+        condition: service_started
+    environment:
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-ICEBERGADMIN}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-iceberg-local-secret}
+      AWS_REGION: us-east-1
+    volumes:
+      - ./spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
+    ports:
+      - "8888:8888" # Optional Jupyter notebook UI
+      - "8080:8080" # Spark master UI
+
+volumes:
+  iceberg-catalog-rustfs:
+
+networks:
+  default:
+    name: iceberg-catalog

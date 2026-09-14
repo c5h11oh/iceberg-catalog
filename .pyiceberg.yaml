@@ -1,0 +1,7 @@
+catalog:
+  local:
+    type: rest
+    uri: http://localhost:8181
+    warehouse: s3://warehouse/iceberg
+    s3.endpoint: http://localhost:9000
+    s3.path-style-access: true
