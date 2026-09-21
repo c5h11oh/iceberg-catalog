@@ -19,7 +19,7 @@ services:
 
   # Creates the bucket the Iceberg warehouse uses. This is safe to run again.
   rustfs-init:
-    image: docker.io/amazon/aws-cli:2
+    image: docker.io/amazon/aws-cli:2.36.49
     depends_on:
       rustfs:
         condition: service_started
